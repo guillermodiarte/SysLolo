@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import date
 
 from app.schemas.reservation_schema import ReservationCreate, ReservationResponse, ReservationUpdate
-from app.models.models import Reservation, ReservationCost, BookingPlatform
+from app.models.models import Reservation, ReservationCost, BookingPlatform, Department
 from app.database import get_db
 
 
@@ -13,6 +13,14 @@ router = APIRouter(prefix="/reservations", tags=["Reservas"])
 
 # Tasa de cambio actual (por el momento, luego se podría integrar una API)
 USD_TO_ARS_RATE = 1200
+
+
+# Verifica si el departamento elegido existe
+def check_department_exist(db: Session, department_id: int):
+    query = db.query(Department).filter(Department.id == department_id)
+
+    if query.first() is None:
+        raise HTTPException(status_code=400, detail=f"El 'department_id' {department_id} no existe en la base de datos de plataformas de reserva.")
 
 
 # Verifica si hay superposición de fechas para el mismo departamento
@@ -33,10 +41,13 @@ def check_overlapping_reservation(db: Session, check_in: date, check_out: date, 
 # Crear una nueva reserva
 @router.post("/", response_model=ReservationResponse)
 def create_reservation(reservation: ReservationCreate, db: Session = Depends(get_db)):
+    reservation_data = reservation.model_dump()
+
+    # Valida que el id de departamento sea uno valido
+    check_department_exist(db, reservation.department_id)
+
     # Validación de superposición de fechas
     check_overlapping_reservation(db, reservation.check_in, reservation.check_out, reservation.department_id)
-
-    reservation_data = reservation.model_dump()
 
     # Validar origin_platform_id si se proporciona
     if reservation_data.get("origin_platform_id") is not None:
