@@ -13,24 +13,24 @@ class PaymentStatus(str, Enum):
 
 # Base del esquema de reserva
 class ReservationBase(BaseModel):
-    guest_name: str
-    guest_phone: Optional[str]
+    guest_name: str = "Name"
+    guest_phone: Optional[str] = "Phone number"
     check_in: date
     check_out: date
-    people_count: int
-    beds: int
-    origin_platform_id: Optional[int] = None
+    people_count: int = 1
+    beds: int = 1
+    origin_platform_id: int = 1
+    department_id: int = 1
+    payment_status: PaymentStatus = None
+
+    down_payment_ars: Optional[float] = 0 # Nuevo campo para la seña
+    amount_usd: Optional[float] = 0 # Total cobrado en Dolares
+    amount_ars: Optional[float] = 0 # Total cobrado en Pesos
+    amount_due: Optional[float] = 0 # Lo que adeuda pagar si pagó una seña
     
-    amount_usd: Optional[float] = None
-    amount_ars: Optional[float] = None # Sigue siendo opcional en la entrada
-    
-    total_revenue_ars: Optional[float] = None # Renombrado
-    down_payment_ars: Optional[float] = None # Nuevo campo para la seña
-    
-    amount_due: Optional[float] = None # Seguirá siendo calculado automáticamente
-    payment_status: PaymentStatus = PaymentStatus.pending
-    is_blocked_on_other_platforms: bool = False
-    department_id: int
+    #Estos datos no se modifican en la creación
+    total_revenue_ars: Optional[float] = 0 # Total de ganancias en ARS Netas
+    is_blocked_on_other_platforms: bool = False # Pregunta si las fechas estan bloqueados en las otras Plataformas
 
 
 # Esquema para creación
@@ -47,13 +47,13 @@ class ReservationUpdate(BaseModel):
     people_count: Optional[int] = None
     beds: Optional[int] = None
     origin_platform_id: Optional[int] = None
-    amount_usd: Optional[float] = None
-    amount_ars: Optional[float] = None
-    
-    total_revenue_ars: Optional[float] = None # Total de ganancias en ARS Netas
-    down_payment_ars: Optional[float] = None # Nuevo campo para la seña
 
-    amount_due: Optional[float] = None
+    amount_usd: Optional[float] = None # Total cobrado en Dolares
+    amount_ars: Optional[float] = None # Total cobrado en Pesos
+    down_payment_ars: Optional[float] = None # Nuevo campo para la seña
+    amount_due: Optional[float] = None # Lo que adeuda pagar si pagó una seña
+    total_revenue_ars: Optional[float] = None # Total de ganancias en ARS Netas
+
     payment_status: Optional[PaymentStatus] = None
     is_blocked_on_other_platforms: Optional[bool] = None
     department_id: Optional[int] = None

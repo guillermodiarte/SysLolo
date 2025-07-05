@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import date
 
 from app.schemas.reservation_schema import ReservationCreate, ReservationResponse, ReservationUpdate
-from app.models.models import Reservation, ReservationCost, BookingPlatform, Department
+from app.models.models import PaymentStatus, Reservation, ReservationCost, BookingPlatform, Department
 from app.database import get_db
 
 
@@ -17,14 +17,20 @@ USD_TO_ARS_RATE = 1200
 
 # Verifica si el departamento elegido existe
 def check_department_exist(db: Session, department_id: int):
-    query = db.query(Department).filter(Department.id == department_id)
-
-    if query.first() is None:
-        raise HTTPException(status_code=400, detail=f"El 'department_id' {department_id} no existe en la base de datos de plataformas de reserva.")
-
+    if not db.query(Department).filter(Department.id == department_id).first():
+        raise HTTPException(
+            status_code=400,
+            detail=f"El 'department_id' {department_id} no existe en la base de datos de departamentos."
+        )
 
 # Verifica si hay superposición de fechas para el mismo departamento
 def check_overlapping_reservation(db: Session, check_in: date, check_out: date, department_id: int, reservation_id: Optional[int] = None):
+    if check_out < check_in:
+        raise HTTPException(
+            status_code=400,
+            detail="El Check-out debe ser una fecha posterior al Check-in."
+        )
+
     query = db.query(Reservation).filter(
         Reservation.department_id == department_id,
         Reservation.check_out > check_in,
@@ -35,8 +41,20 @@ def check_overlapping_reservation(db: Session, check_in: date, check_out: date, 
         query = query.filter(Reservation.id != reservation_id)
 
     if query.first():
-        raise HTTPException(status_code=400, detail="Ya existe una reserva para esas fechas en este departamento.")
+        raise HTTPException(
+            status_code=400,
+            detail="Ya existe una reserva para esas fechas en este departamento."
+        )
+    
 
+# Verifica si el ID de plataforma de origen existe
+def check_origin_platform_exist(db: Session, platform_id: int):
+    platform = db.query(BookingPlatform).filter(BookingPlatform.id == platform_id).first()
+    if not platform:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El 'origin_platform_id' {platform_id} no existe en la base de datos de plataformas de reserva."
+        )
 
 # Crear una nueva reserva
 @router.post("/", response_model=ReservationResponse)
@@ -50,23 +68,15 @@ def create_reservation(reservation: ReservationCreate, db: Session = Depends(get
     check_overlapping_reservation(db, reservation.check_in, reservation.check_out, reservation.department_id)
 
     # Validar origin_platform_id si se proporciona
-    if reservation_data.get("origin_platform_id") is not None:
-        platform_id = reservation_data["origin_platform_id"]
-        # Asegurarse de que el ID no sea 0 si no se maneja en la DB
-        if platform_id == 0:
-            raise HTTPException(status_code=400, detail="El 'origin_platform_id' no puede ser 0. Use 'null' para reservas directas.")
-        
-        # Verificar que el platform_id exista en la tabla BookingPlatform
-        existing_platform = db.query(BookingPlatform).filter(BookingPlatform.id == platform_id).first()
-        if not existing_platform:
-            raise HTTPException(status_code=400, detail=f"El 'origin_platform_id' {platform_id} no existe en la base de datos de plataformas de reserva.")
-    
+    if "origin_platform_id" in reservation_data and reservation_data["origin_platform_id"] is not None:
+        check_origin_platform_exist(db, reservation_data["origin_platform_id"])
+
     # Lógica de cálculo de amount_ars
     # Aseguramos que amount_ars siempre tenga un valor antes de ser guardado
-    if reservation_data.get("amount_usd") is not None:
+    if reservation_data.get("amount_usd")!=0:
         # Si se proporciona amount_usd, calculamos amount_ars
-        reservation_data["amount_ars"] = reservation_data["amount_usd"] * USD_TO_ARS_RATE
-    elif reservation_data.get("amount_ars") is None:
+        reservation_data["total_revenue_ars"] = reservation_data["amount_usd"] * USD_TO_ARS_RATE
+    elif reservation_data.get("amount_ars")==0:
         # Si no se proporciona amount_usd y amount_ars tampoco, levantamos un error
         # Porque amount_ars es nullable=False en el modelo de la DB
         raise HTTPException(status_code=400, detail="Debe proporcionar al menos 'amount_usd' o 'amount_ars'. 'amount_ars' no puede ser nulo.")
@@ -75,24 +85,28 @@ def create_reservation(reservation: ReservationCreate, db: Session = Depends(get
 
 
     # Cálculo del total_revenue_ars
-    # Si total_revenue_ars no se proporciona, asumimos que es igual a amount_ars
-    if reservation_data.get("total_revenue_ars") is None:
-        # Usamos el valor final de amount_ars (calculado o proporcionado)
+    # Si total_revenue_ars no se proporciona, asumimos que es igual a amount_usd
+    if reservation_data.get("total_revenue_ars") is not None:
+        reservation_data["total_revenue_ars"] += reservation_data.get("amount_ars")
+    else:
         reservation_data["total_revenue_ars"] = reservation_data.get("amount_ars")
 
     # Cálculo del monto restante (amount_due)
-    amount_due = None
-    # Solo calculamos amount_due si hay un total_revenue_ars
-    if reservation_data.get("total_revenue_ars") is not None:
-        if reservation_data.get("down_payment_ars") is not None:
+    if reservation_data.get("payment_status") != PaymentStatus.complete:
+        # Solo calculamos amount_due si hay una seña en down_payment_ars
+        if reservation_data.get("down_payment_ars")!=0:
             if reservation_data["down_payment_ars"] > reservation_data["total_revenue_ars"]:
                 raise HTTPException(status_code=400, detail="El valor de la seña no puede ser mayor que el total de ganancias.")
-            amount_due = reservation_data["total_revenue_ars"] - reservation_data["down_payment_ars"]
+            reservation_data["amount_due"] = reservation_data["total_revenue_ars"] - reservation_data["down_payment_ars"]
+            reservation_data["payment_status"] = PaymentStatus.deposit
         else:
-            # Si no hay seña pero sí total_revenue_ars, el monto adeudado es el total_revenue_ars
-            amount_due = reservation_data["total_revenue_ars"]
-    
-    reservation_data["amount_due"] = amount_due
+            # Si no hay seña pero se modificó el amount_due, se carga el total para indicar que falta
+            # pagar completo
+            reservation_data["amount_due"] = reservation_data["total_revenue_ars"]
+            reservation_data["payment_status"] = PaymentStatus.pending
+    else:
+        reservation_data["amount_due"] = 0
+        reservation_data["down_payment_ars"] = 0
 
     # Crear objeto reserva
     new_reservation = Reservation(**reservation_data)
@@ -125,7 +139,10 @@ def update_reservation(reservation_id: int, data: ReservationUpdate, db: Session
     if not reservation:
         raise HTTPException(status_code=404, detail="Reserva no encontrada.")
 
-    updated_data = data.model_dump(exclude_unset=True) 
+    # convierte el modelo data en un diccionario
+    # exclude_unset=True filtra y omite los campos que no fueron incluidos explícitamente por el usuario
+    # en un PUT o PATCH, no siempre se envían todos los campos
+    updated_data = data.model_dump(exclude_unset=True)
 
     # Validar origin_platform_id si se proporciona en la actualización
     if "origin_platform_id" in updated_data and updated_data["origin_platform_id"] is not None:
